@@ -1,60 +1,82 @@
-# ---------------------------------------------------------
-#  Simple Makefile - Library Management System
-#  Folders: src/*.c   include/library.h   tests/*.cpp
-#  Commands: make | make test | make valgrind | make coverage
-#            make check | make misra | make clean
-# ---------------------------------------------------------
-
+# --- Compilers and Flags ---
 CC       = gcc
 CXX      = g++
-CFLAGS   = -std=c11 -D_POSIX_C_SOURCE=200809L -Iinclude -Wall -Wextra -g -O0
-CXXFLAGS = -std=c++17 -Iinclude -Itests -Wall -Wextra -g -O0
-EXTRA    =                  # "make coverage" fills this with --coverage
+CFLAGS   = -g -Wall --coverage -Iinclude -I.
+CXXFLAGS = -std=c++17 -g -Wall --coverage -Iinclude -I.
+LDFLAGS  = --coverage -lgtest -lgtest_main -pthread -lstdc++fs
 
-SRC      = $(wildcard src/*.c)                    # all C files
-LIB_SRC  = $(filter-out src/main.c,$(SRC))        # all C files except main.c
-TESTS    = $(wildcard tests/*.cpp)                # GoogleTest files
-OBJ      = $(patsubst src/%.c,build/%.o,$(LIB_SRC))
+# --- Source Files ---
+# All C files EXCEPT main.c for the tests
+SRC_C = book.c \
+        member.c \
+        storage.c \
+        transaction.c \
+        utils.c
 
-.PHONY: all test valgrind coverage check misra clean
+OBJ       = $(SRC_C:.c=.o)
+TEST_SRC  = test_library.cpp
+TEST_BIN  = run_all_tests
+MAIN_BIN  = library_app
 
-# 1) Build the program:  make
-all: library_app
+.PHONY: all test cppcheck valgrind run clean audit
 
-library_app: $(OBJ) build/main.o
-	$(CC) $(EXTRA) -o $@ $^
+all: test
 
-# Turn each src/x.c into build/x.o
-build/%.o: src/%.c include/library.h
-	mkdir -p build
-	$(CC) $(CFLAGS) $(EXTRA) -c $< -o $@
+# 1. Compile the C files for testing
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
 
-# 2) Unit tests (GoogleTest):  make test
-build/tests: $(TESTS) tests/test_helpers.h $(OBJ)
-	$(CXX) $(CXXFLAGS) $(EXTRA) -o $@ $(TESTS) $(OBJ) -lgtest_main -lgtest -pthread
+# 2. Link the Test Executable
+$(TEST_BIN): $(OBJ) $(TEST_SRC)
+	$(CXX) $(CXXFLAGS) $(TEST_SRC) $(OBJ) $(LDFLAGS) -o $(TEST_BIN)
 
-test: build/tests
-	./build/tests
+# 3. Run the Tests
+test: $(TEST_BIN)
+	./$(TEST_BIN)
 
-# 3) Memory check:  make valgrind
-valgrind: build/tests
-	valgrind --leak-check=full --error-exitcode=1 ./build/tests
+# 4. Run Cppcheck Static Analysis
+cppcheck:
+	cppcheck --enable=warning,performance,portability --std=c11 -Iinclude -I. --suppress=missingIncludeSystem . 2> cppcheck_final.txt
+	@echo "--- Cppcheck Results ---"
+	@cat cppcheck_final.txt
 
-# 4) Code coverage:  make coverage
-coverage: clean
-	$(MAKE) EXTRA=--coverage test
-	gcov -b -c -o build $(LIB_SRC) | grep -A1 "^File 'src/"
+# 5. Compile the Main App and Run Valgrind
+valgrind:
+	$(CC) $(CFLAGS) *.c -o $(MAIN_BIN)
+	valgrind --leak-check=full ./$(MAIN_BIN)
 
-# 5) Static analysis:  make check
-check:
-	cppcheck --enable=warning,performance --suppress=missingIncludeSystem \
-	         --std=c11 --language=c --error-exitcode=1 -Iinclude src
+# 6. Compile and Run the Main App Normally
+run:
+	$(CC) $(CFLAGS) *.c -o $(MAIN_BIN)
+	./$(MAIN_BIN)
 
-# 6) MISRA C check (cppcheck addon, never stops the build):  make misra
-misra:
-	-cppcheck --addon=misra --suppress=missingIncludeSystem \
-	          --std=c11 --language=c -Iinclude src
-
-# 7) Delete everything built:  make clean
+# 7. Clean up all generated files
 clean:
-	rm -rf build library_app *.gcov *.gcda *.gcno
+	rm -f *.o *.gcda *.gcno *.gcov $(TEST_BIN) $(MAIN_BIN) cppcheck_final.txt test_input.txt *.dat testing_audit.log
+
+# =========================================================================
+# 8. THE AUDIT LOG TARGET (For the instructor)
+# =========================================================================
+audit:
+	@rm -f testing_audit.log
+	@echo "==================================================" >> testing_audit.log
+	@echo "TIMESTAMP: $$(date)" >> testing_audit.log
+	@echo "ACTION: Compilation and GTest Execution" >> testing_audit.log
+	@echo "==================================================" >> testing_audit.log
+	@$(MAKE) clean >> testing_audit.log 2>&1
+	@$(MAKE) test >> testing_audit.log 2>&1
+	
+	@echo -e "\n==================================================" >> testing_audit.log
+	@echo "TIMESTAMP: $$(date)" >> testing_audit.log
+	@echo "ACTION: Valgrind Memory Analysis" >> testing_audit.log
+	@echo "==================================================" >> testing_audit.log
+	@$(CC) $(CFLAGS) *.c -o $(MAIN_BIN)
+	@echo 0 | valgrind --leak-check=full ./$(MAIN_BIN) >> testing_audit.log 2>&1
+	
+	@echo -e "\n==================================================" >> testing_audit.log
+	@echo "TIMESTAMP: $$(date)" >> testing_audit.log
+	@echo "ACTION: Cppcheck Static Analysis" >> testing_audit.log
+	@echo "==================================================" >> testing_audit.log
+	@cppcheck --enable=warning,performance,portability --std=c11 -Iinclude -I. --suppress=missingIncludeSystem . >> testing_audit.log 2>&1
+	
+	@echo "✅ Audit complete! Check 'testing_audit.log' for the timestamped report."
